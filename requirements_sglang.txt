@@ -1,0 +1,4 @@
+numpy==2.4.4
+openai==2.6.1
+sglang[all]==0.5.9
+torch==2.9.1

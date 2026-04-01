@@ -1,0 +1,4 @@
+metric,n_total,n_perfect,n_partial,n_incorrect,auprc,p_at_90r,p_at_95r,p_at_99r,auroc,sens_at_90spec,sens_at_95spec,sens_at_99spec
+domain_lp,756,369,297,90,0.3399,0.2485,0.2396,0.1879,0.8409,0.4444,0.2667,0.0333
+domain_ent,756,369,297,90,0.345,0.2404,0.2159,0.1961,0.841,0.4889,0.2778,0.0111
+prob_incorrect,756,369,297,90,0.3407,0.2477,0.2092,0.1867,0.8387,0.4667,0.2556,0.0111
