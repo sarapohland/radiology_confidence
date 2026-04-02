@@ -1,6 +1,6 @@
 # Confidence Estimation for Radiology Report Generation
 
-This repository implements a post-training confidence estimation pipeline for a radiology report generation model. Given a chest X-ray, MedGemma generates a free-text radiology report. Confidence estimation determines how likely that report is to be judged correct by CRIMSON--a clinically-grounded LLM-based radiology report evaluator--without requiring CRIMSON at inference time.
+This repository implements a post-training confidence estimation pipeline for a radiology report generation model. Given a chest X-ray, MedGemma generates a free-text radiology report. Confidence estimation determines how likely that report is to be judged correct by CRIMSON -- a clinically-grounded LLM-based radiology report evaluator -- without requiring CRIMSON at inference time.
 
 The pipeline covers three baseline approaches to confidence estimation:
 
@@ -10,7 +10,7 @@ The pipeline covers three baseline approaches to confidence estimation:
 
 Each method includes a calibration step that fits a multivariate logistic regression over all of that method's metrics to produce a single P(incorrect) score.
 
-See [Section 3](#3-future-work) for planned extensions including vision-text grounding, hidden-state probing, and more in-depth calibration combining signals across various methods.
+See [Section 3](#3-future-work) for planned extensions including vision-text grounding, hidden-state probing, more in-depth calibration combining signals across various methods, trade-off analysis, distribution shift robustness, and human usability evaluation.
 
 The goal of this repository is to get a sense for which metrics provide some signal about report accuracy and create baselines for more involved metrics. The main effort of future work would be to explore more interesting metrics and decide how to use all these signals.
 
@@ -43,7 +43,10 @@ See the sections below for details on each step and its outputs. Configurable pa
    - [3.1 Vision-Text Grounding](#31-vision-text-grounding)
    - [3.2 Hidden-State Probing](#32-hidden-state-probing)
    - [3.3 Confidence Calibration](#33-confidence-calibration)
-   - [3.4 Other Avenues](#34-other-avenues-for-future-work)
+   - [3.4 Trade-off Analysis](#34-trade-off-analysis)
+   - [3.5 Distribution Shifts](#35-distribution-shifts)
+   - [3.6 Human Usability](#36-human-usability)
+   - [3.7 Other Avenues for Future Work](#37-other-avenues-for-future-work)
 4. [Repository Structure](#4-repository-structure)
 
 ---
@@ -102,7 +105,9 @@ data/xray_samples/
             └── volume.mp4        # HEVC-encoded X-ray frames
 ```
 
-### 1.2 Generate confidence estimation dataset
+---
+
+### 1.2 Generate Confidence Estimation Dataset
 
 #### 1.2.1 Run inference with MedGemma:
 
@@ -248,6 +253,7 @@ This command produces the following:
 - Conduct more formal calibration with a larger dataset.
 - Investigate whether per-sentence or per-finding aggregation outperforms per-token aggregation.
 
+---
 
 ### 2.2 Self-Consistency Analysis
 
@@ -317,7 +323,7 @@ This command produces distribution plots, precision-recall curves, and ROC curve
 #### Limitations:
 
 - The ROUGE similarity scores only provide lexical similarity. Two correct reports about the same case can have very different wording and still be equally right.
-- Perturbations are applied uniformly across all frames rather than targeting diagnostically relevant regions. Gaussian noise and blur also do not necessarily reflect natural variations in X-Ray images.
+- Perturbations are applied uniformly across all frames rather than targeting diagnostically relevant regions. Gaussian noise and blur also do not necessarily reflect natural variations in X-ray images.
 - With temperature=0, the only stochasticity comes from the image perturbation; small perturbations that don't change the visual content enough to shift the response will produce trivially high consistency.
 
 #### Future work:
@@ -328,6 +334,7 @@ This command produces distribution plots, precision-recall curves, and ROC curve
 - Apply noise to the vision encoding directly if available.
 - Increase the number of samples and test if performance is affected. Also evaluate how much this affects computation time.
 
+---
 
 ### 2.3 Stability Analysis
 
@@ -386,7 +393,6 @@ This command produces distribution plots, precision-recall curves, and ROC curve
 - For greedy-anchored similarity (`mean_vs_greedy`), ROUGE1 appears to be more informative than ROUGEL.
 - Like the self-consistency metrics, stability metrics are less useful than the logit-based ones on their own and take longer to compute. However, there are many ways to improve these metrics, and they may be used in combination with logit-based metrics (and the self-consistency ones).
 
-
 #### Limitations:
 
 - The ROUGE similarity scores only provide lexical similarity. Two correct reports about the same case can have very different wording and still be equally right.
@@ -404,7 +410,7 @@ This command produces distribution plots, precision-recall curves, and ROC curve
 
 ## 3. Future Work
 
-Below are some other methods for confidence estimation that cannot be easily implemented with the currently available model/data, but would be interesting to explore with a model that exposes intermediate representations and additional data. 
+Below are planned extensions and open questions spanning additional confidence estimation methods (requiring access to intermediate model representations), more rigorous calibration, systematic trade-off analysis, robustness to distribution shifts, and human usability evaluation.
 
 ### 3.1 Vision-Text Grounding
 
@@ -412,8 +418,10 @@ Below are some other methods for confidence estimation that cannot be easily imp
 
 **What would be needed**:
 - Access to intermediate model representations
-- A shared text embedding space
+- A shared vision-text embedding space
 - Storage for vision and response encodings
+
+---
 
 ### 3.2 Hidden-State Probing
 
@@ -424,29 +432,75 @@ Below are some other methods for confidence estimation that cannot be easily imp
 - A labelled training split
 - Probe training and serialization
 
+---
+
 ### 3.3 Confidence Calibration
 
-**Overview**: A simple per-method calibration is implemented in Sections 2.1.2, 2.2.2, and 2.3.2 (multivariate logistic regression over each method's own metrics). It would be useful to implement multi-signal calibration, combining logit-based, grounding, consistency, stability, and probe features into a single unified P(incorrect) score, and evaluating it on a completely unseen test split.
+**Overview**: A simple per-method calibration is implemented in Sections 2.1.2, 2.2.2, and 2.3.2 (multivariate logistic regression over each method's own metrics), but this method is a bit crude and not extensively evaluated. We should implement and compare calibration methods beyond logistic regression, such as temperature scaling, Platt scaling, and non-parametric isotonic regression.
 
-We could consider calibration methods beyond logistic regression, such as non-parametric isotonic regression and a learned scalar temperature applied to an aggregated confidence score. We should also evaluate the calibrated score not only in terms of discrimination ability (i.e., AUPRC, Precision @ 90/95/99% Recall, AUROC as currently implemented) but also how well the score is actually calibrated (in terms of ECE, reliability diagrams, coverage-accuracy curves, etc.).
+**Multi-signal calibration**: It would also be interesting to implement multi-signal calibration, combining logit-based, grounding, consistency, stability, and probe features into a single unified P(incorrect) score, and evaluating it on a completely unseen test split.
+
+**Calibration evaluation**: We should also evaluate the calibrated score not only in terms of discrimination ability (i.e., AUPRC, Precision @ 90/95/99% Recall, AUROC as currently implemented) but also how well the score is actually calibrated (in terms of Brier score, ECE, reliability diagrams, coverage-accuracy curves, etc.).
+
+**Conformal prediction**: As an alternative to probability calibration, conformal prediction provides distribution-free coverage guarantees -- e.g., a set of candidate findings that contains the correct finding with at least 95% probability. ["Conformal Language Modeling"](https://arxiv.org/pdf/2306.10193) demonstrates this in the context of language model generation. In the radiology setting this could produce a set of plausible findings for each study rather than a single report, which is also relevant to the human usability work in [Section 3.6](#36-human-usability).
 
 **What would still be needed**:
-- Multiple confidence signals
+- (Optionally) Multiple confidence signals
+- (Preferably) A labelled training split
 - A held-out test split
 
+---
 
-### 3.4 Other Avenues for Future Work
+### 3.4 Trade-off Analysis
 
-- Combine the three already implemented methods to create new **hybrid methods**.
-- Estimate **confidence per-finding**, rather than for the report as a whole.
+**Overview**: Confidence estimation methods vary in practical utility -- both in terms of their discriminative power plus how well they are calibrated and in terms of their computational complexity. We should evaluate all of the methods in terms of their performance and computational cost to better understand the extent to which this trade-off exists.
+
+**Multi-step estimation**: Depending on these trade-offs, we could design **multi-step** confidence estimation schemes that move from coarse/simple/fast confidence metrics to more accurate/involved metrics depending on some decision criteria.
+
+**What would still be needed**:
+- A set of fully implemented confidence estimation methods
+
+---
+
+### 3.5 Distribution Shifts
+
+**Overview**: It is possible that models trained on one set of inputs will perform poorly on another set drawn from a different distribution (e.g., inputs from a different patient population or collected with a different scanner). It is important to understand how model performance varies across different distributions of data and whether confidence estimates continue to provide a useful signal about model performance.
+
+**OOD detection**: If we notice that model performance varies across distributions in a way that is not fully captured by the confidence signal, we should design out-of-distribution (OOD) detection methods. We could explore existing methods for visual OOD detection that utilize the vision embeddings of the generative radiology model, considering first distance-based and reconstruction-based methods. We may need to adapt such methods to handle the dimensionality of medical inputs.
+
+**What would still be needed**:
+- (Preferably) Access to vision embeddings
+- (Preferably) Access to training data
+- OOD dataset(s)
+
+---
+
+### 3.6 Human Usability
+
+**Overview**: ["From Calibration to Collaboration: LLM Uncertainty Quantification Should Be More Human-Centered"](https://arxiv.org/abs/2506.07461) argues that we lack a comprehensive understanding of how useful LLM UQ methods are in assisting humans on real-world decision making tasks, or when these methods increase the transparency of recommendations and decisions generated by an LLM. They argue for a focus on metrics that correlate with _human uplift_ on real-world decision tasks. In particular, do humans with access to algorithmic advice with quantified uncertainty perform better on real-world tasks than humans with (i) algorithmic advice but no quantified uncertainty; and (ii) no algorithmic advice at all?
+
+**Per-finding confidence**: To improve the utility of the confidence information for the user, it would likely be helpful to estimate confidence per-finding, rather than for the report as a whole (potentially using a simple sentence splitter to extract individual findings).
+
+**Platform integration**: We could evaluate how traditional LLM UQ uncertainty presentation schemes (e.g., displaying claim-level numeric probabilities, linguistic uncertainty, hedges with anthropomorphic cues) perform in the particular context of radiology report generation.
+
+Taking inspiration from ["Robots That Ask For Help: Uncertainty Alignment for Large Language Model Planners"](https://arxiv.org/abs/2307.01928), we may also have the user choose between multiple options when the model is not confident in a particular response. ["Conformal Language Modeling"](https://arxiv.org/pdf/2306.10193) presents a method to generate a complete set of candidate options (already done in the context of radiology report generation). 
+
+We may also choose to simply not show low-confidence suggestions (below some threshold). We could evaluate the accuracy of generated reports if we remove these low-confidence reports.
+
+**What would still be needed**:
+- (Eventually) Platform integration and human evaluators
+
+---
+
+### 3.7 Other Avenues for Future Work
+
+- Consider model **ensembling**/mixture-of-experts approaches for confidence estimation.
+- Combine categories of methods to create new **hybrid methods**.
 - Utilize the **error breakdown** provided by CRIMSON (or another LLM judge). Can we detect false findings, or predict particular types of errors without access to the ground-truth reports?
-- Explore **human-centered** confidence estimation. A starting point for this line of work: ["From Calibration to Collaboration: LLM Uncertainty Quantification Should Be More Human-Centered"](https://arxiv.org/abs/2506.07461).
-- Explore confidence estimation with **statistical guarantees**. A starting point for this line of work: ["Robots That Ask For Help: Uncertainty Alignment for Large Language Model Planners"](https://arxiv.org/abs/2307.01928).
 - Where relevant, better calibrate token probabilities during model training.
 - Evaluate how confidence estimation methods generalize across data modalities and different generative models.
-- Think about the utility of **out-of-distribution (OOD) detection** for the datasets of interest.
-- Explore **multi-step** confidence estimation methods that move from coarse/simple/fast confidence metrics to more accurate/involved metrics depending on some decision criteria.
-- Evaluate ways to **incorporate** confidence scores into the platform or to **improve** the model performance.
+- Explore ways to use confidence scores to **improve** the model performance. For example, we could use a low-confidence prediction as a trigger to re-generate the report with some variation. We may also better characterize situations where our model does poorly and re-train.
+
 
 ---
 
@@ -460,20 +514,20 @@ radiology_confidence/
 │       └── studies/<study_id>/...
 │
 ├── outputs/
-│   ├── predictions.jsonl              # inference outputs (1.1.1)
-│   ├── judge_scores.jsonl             # CRIMSON scores (1.1.2)
+│   ├── predictions.jsonl              # inference outputs (1.2.1)
+│   ├── judge_scores.jsonl             # CRIMSON scores (1.2.2)
 │   ├── logit_scores.jsonl             # logit-based metrics + prob_incorrect (2.1.1, 2.1.2)
 │   ├── consistency_scores.jsonl       # self-consistency metrics + prob_incorrect (2.2.1, 2.2.2)
 │   └── stability_scores.jsonl         # stability metrics + prob_incorrect (2.3.1, 2.3.2)
 │
 ├── results/
-│   ├── judge_summary.csv              # CRIMSON score distribution + threshold table (1.1.3)
+│   ├── judge_summary.csv              # CRIMSON score distribution + threshold table (1.2.3)
 │   ├── logit_summary.csv              # logit metric AUPRC / AUROC table (2.1.3)
 │   ├── consistency_summary.csv        # consistency metric AUPRC / AUROC table (2.2.3)
 │   ├── stability_summary.csv          # stability metric AUPRC / AUROC table (2.3.3)
 │
 ├── plots/
-│   ├── judge/                         # CRIMSON score distribution + error breakdown (1.1.3)
+│   ├── judge/                         # CRIMSON score distribution + error breakdown (1.2.3)
 │   ├── logit/
 │   │   ├── distributions/             # three-class KDE plots per metric (2.1.3)
 │   │   ├── pr_curves/                 # precision-recall curves per metric (2.1.3)
@@ -498,9 +552,9 @@ radiology_confidence/
 │
 ├── scripts/
 │   ├── prompt.py                      # MedGemma report generation prompt template
-│   ├── infer.py                       # 1.1.1 -- run MedGemma inference, record logits
-│   ├── evaluate.py                    # 1.1.2 -- CRIMSON judge scoring
-│   ├── plot_scores.py                 # 1.1.3 -- plot CRIMSON score distribution
+│   ├── infer.py                       # 1.2.1 -- run MedGemma inference, record logits
+│   ├── evaluate.py                    # 1.2.2 -- CRIMSON judge scoring
+│   ├── plot_scores.py                 # 1.2.3 -- plot CRIMSON score distribution
 │   ├── logits.py                      # 2.1.1 -- compute logit-based metrics
 │   ├── consistency.py                 # 2.2.1 -- self-consistency under perturbation
 │   ├── stability.py                   # 2.3.1 -- stability under temperature sampling
