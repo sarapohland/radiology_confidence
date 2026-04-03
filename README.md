@@ -2,13 +2,13 @@
 
 This repository implements a post-training confidence estimation pipeline for a radiology report generation model. Given a chest X-ray, MedGemma generates a free-text radiology report. Confidence estimation determines how likely that report is to be judged correct by CRIMSON -- a clinically-grounded LLM-based radiology report evaluator -- without requiring CRIMSON at inference time.
 
-The repository is organized into four phases: confidence signal extraction ([Section 2](#2-confidence-signals)), calibration and evaluation ([Section 3](#3-confidence-calibration-and-evaluation)), and integration into an assistive agent ([Section 4](#4-confidence-integration-and-usability)). We have partially implemented three signal extraction methods:
+The repository is organized into four phases: setup ([Section 1](#1-setup)), confidence signal extraction ([Section 2](#2-confidence-signals)), calibration and evaluation ([Section 3](#3-confidence-calibration-and-evaluation)), and integration into an assistive agent ([Section 4](#4-confidence-integration-and-usability)). The following three signal extraction methods are currently implemented (at least in part):
 
 - **Logit-based metrics** ([Section 2.1](#21-logit-based-confidence)): functions of token log-probabilities and entropies recorded during generation
 - **Consistency under input perturbation** ([Section 2.2](#22-consistency-under-input-perturbation)): response consistency under controlled input perturbations
 - **Consistency during sampling** ([Section 2.3](#23-consistency-during-sampling)): response variance under temperature sampling
 
-We have not yet implemented vision-text grounding ([Section 2.4](#24-future-vision-text-grounding)), hidden-state probing ([Section 2.5](#25-future-hidden-state-probing)), explicit human feedback ([Section 2.6](#26-future-explicit-human-feedback)), or implicit human feedback ([Section 2.7](#27-future-implicit-human-feedback)). Some initial efforts have been made towards confidence calibration and evaluation ([Section 3](#3-confidence-calibration-and-evaluation)), but there is much work to be done in this direction. We also discuss some initial ideas surrounding integration into an assistive agent ([Section 4](#4-confidence-integration-and-usability)).
+In the future, it would be interesting to extract confidence information from vision-text grounding ([Section 2.4](#24-future-vision-text-grounding)), hidden-state probing ([Section 2.5](#25-future-hidden-state-probing)), explicit human feedback ([Section 2.6](#26-future-explicit-human-feedback)), or implicit human feedback ([Section 2.7](#27-future-implicit-human-feedback)). Some initial efforts have been made towards confidence calibration and evaluation ([Section 3](#3-confidence-calibration-and-evaluation)), but there is much work to be done in this direction. [Section 4](#4-confidence-integration-and-usability) discusses some initial ideas surrounding integration into an assistive agent.
 
 ## Full Pipeline
 
@@ -159,7 +159,7 @@ This script produces the following:
 
 ## 2. Confidence Signals
 
-This section covers methods for extracting a confidence signal from the model and its outputs. Sections 2.1–2.3 describe implemented methods; each includes initial findings, limitations, and directions for future work. Sections 2.4–2.7 describe future directions that require additional model access or platform infrastructure not currently available.
+This section covers methods for extracting information regarding confidence from the model and its outputs. Sections 2.1–2.3 describe (partially) implemented methods; each includes initial findings, limitations, and directions for future work. Sections 2.4–2.7 describe future directions that require additional model access or platform infrastructure not currently available.
 
 ### 2.1 Logit-Based Confidence
 
@@ -204,23 +204,23 @@ For each response, this script computes the following metrics over the per-token
 - `semantic_ent`: Average token entropy weighted by semantic significance
 - `domain_ent`: Average token entropy weighted by RadLex ontology importance
 
-#### Initial findings:
+#### 2.1.2 Initial findings:
 
 - The log probability of the generated token and the per-token entropy are (unsurprisingly) tightly coupled and a sort of inverse of one another. Neither is clearly better to use than the other and may be used in combination.
 - Ordered weighting is not at all helpful. Semantic and domain weighting provide a small benefit over the unweighted average with domain weighting preferred between the two.
 - It is generally preferred to look at bottom percentiles or bottom k samples over the absolute minimum log probability. A similar conclusion holds for entropy.
 
-#### Limitations:
+#### 2.1.3 Limitations:
 
 - Log probabilities at temperature=0 are systematically overconfident without appropriate calibration during training.
 - Entropy is approximated from the top-20 token distribution, excluding the long tail of the vocabulary; for tokens where probability mass is spread broadly, this underestimates uncertainty.
 - The weighting schemes (order, semantic, domain) are hand-designed heuristics; the weights are not learned and may not be optimal for this task or this model.
 
-#### Future work:
+#### 2.1.4 Future work:
 
 - Test different values of k for top/bottom k sample metrics.
 - Consider the use of other lexicons (beyond RadLex) for domain weighting.
-- Learn the weighting function (e.g. train a small probe to predict per-token importance from the token and its position in the report structure).
+- Learn the weighting function (e.g., train a small probe to predict per-token importance from the token and its position in the report structure).
 - Investigate whether per-sentence or per-finding aggregation outperforms per-token aggregation.
 
 ---
@@ -264,21 +264,21 @@ The `--metrics` flag can be used to select the metrics to be collected. By defau
 
 Results are stored in `outputs/consistency_scores.jsonl`.
 
-#### Initial findings:
+#### 2.2.2 Initial findings:
 
 - Perturbing the input using blur provides a more useful signal than adding noise, but taking the average across both methods performs the best.
 - Mean ROUGE-1 outperforms ROUGE-L in this setting, suggesting unigram overlap is more informative than sequence order preservation for this task.
-- The consistency metrics are less useful than the logit-based ones on their own and take longer to compute. However, there are many ways to improve these metrics, and they may be used in combination with logit-based metrics.
+- These consistency metrics are less useful than the logit-based ones on their own and take longer to compute. However, there are many ways to improve these metrics, and they may be used in combination with logit-based ones.
 
-#### Limitations:
+#### 2.2.3 Limitations:
 
 - The ROUGE similarity scores only provide lexical similarity. Two correct reports about the same case can have very different wording and still be equally right.
 - Perturbations are applied uniformly across all frames rather than targeting diagnostically relevant regions. Gaussian noise and blur also do not necessarily reflect natural variations in X-ray images.
 - With temperature=0, the only stochasticity comes from the image perturbation; small perturbations that don't change the visual content enough to shift the response will produce trivially high consistency.
 
-#### Future work:
+#### 2.2.4 Future work:
 
-- Consider other metrics to measure extent of response change (e.g., score of LLM judge), while considering the potential increase in inference time.
+- Consider other metrics to measure extent of response change (e.g., score of LLM judge), while being mindful of the potential increase in inference time.
 - Apply more natural variations to input frames that reflect realistic scanner variability (e.g., different viewing angles, scanner noise profiles).
 - Selectively mask or occlude anatomical regions and measure whether the report changes for that finding specifically.
 - Apply noise to the vision encoding directly if available.
@@ -317,23 +317,23 @@ For each study, this script generates N responses by sampling from MedGemma at a
 
 Results are stored in `outputs/stability_scores.jsonl`.
 
-#### Initial findings:
+#### 2.3.2 Initial findings:
 
 - Greedy-anchored similarity (`mean_vs_greedy`) substantially outperforms pairwise similarity (`mean_pairwise`). It matters more how much samples drift from the model's modal prediction than how much they vary relative to one another.
 - For greedy-anchored similarity (`mean_vs_greedy`), ROUGE1 appears to be more informative than ROUGEL.
-- Like the consistency metrics, stability metrics are less useful than the logit-based ones on their own and take longer to compute. However, there are many ways to improve these metrics, and they may be used in combination with logit-based metrics (and the consistency ones).
+- As with the consistency under input perturbation metrics, these stability metrics are less useful than the logit-based ones on their own and take longer to compute. However, there are many ways to improve them, and they may be used in combination with others.
 
-#### Limitations:
+#### 2.3.3 Limitations:
 
 - The ROUGE similarity scores only provide lexical similarity. Two correct reports about the same case can have very different wording and still be equally right.
-- The choice of temperature is a free hyperparameter -- higher temperatures amplify variance for all studies equally, potentially changing which studies rank as uncertain.
+- The choice of temperature is a free hyperparameter -- higher temperatures amplify variance for all studies equally, potentially changing which studies rank as uncertain. The default temperature may currently be too high for the default number of samples.
 
-#### Future work:
+#### 2.3.4 Future work:
 
-- Consider other metrics to measure extent of response change (e.g., score of LLM judge), while considering the potential increase in inference time.
+- Consider other metrics to measure extent of response change (e.g., score of LLM judge), while being mindful of the potential increase in inference time.
 - Evaluate whether sampling variance correlates with correctness across different temperature values. We may also combine the scores produced at multiple temperature values.
 - Increase the number of samples and test if performance is affected. Also evaluate how much this affects computation time.
-- Implement MC Dropout as an alternative to temperature sampling (requires dropout layers to remain active at inference).
+<!-- - Implement MC Dropout as an alternative to temperature sampling (requires dropout layers to remain active at inference). -->
 
 ---
 
@@ -350,7 +350,7 @@ Results are stored in `outputs/stability_scores.jsonl`.
 
 ### 2.5 (Future) Hidden-State Probing
 
-**Overview**: Hidden-state probing trains a lightweight classifier (logistic regression or small MLP) on the model's internal representations to predict whether a given response will be judged correct by CRIMSON. Unlike the currently implemented approaches, this can capture uncertainty signals encoded in the model's internal state rather than derived solely from its outputs.
+**Overview**: Hidden-state probing trains a lightweight classifier (usually small MLP) on the model's internal representations to predict whether a given response will be judged correct. Unlike the currently implemented approaches, this can capture uncertainty signals encoded in the model's internal state rather than derived solely from its outputs.
 
 **What would be needed**:
 - Access to hidden states
@@ -361,15 +361,9 @@ Results are stored in `outputs/stability_scores.jsonl`.
 
 ### 2.6 (Future) Explicit Human Feedback
 
-**Overview**: When a radiologist reviews a generated report, their accept/reject decisions and any corrections they make are a rich source of supervisory signal. A rejected suggestion paired with the radiologist's replacement text reveals potential errors, as well as individual preferences. This direction connects to research on [Reinforcement Learning from Human Feedback (RLHF)](https://arxiv.org/abs/2405.20677), as well as [Recommender Systems (RS)](https://arxiv.org/html/2407.13699v1).
+**Overview**: When a radiologist reviews a generated report, their accept/reject decisions and any corrections they make are a rich source of supervisory signal. A rejected suggestion paired with the radiologist's replacement text reveals potential errors, as well as individual preferences. Rejection rates are a direct real-world signal of model failure. Over time, per-study and per-finding-type rejection rates can be aggregated to recalibrate confidence scores and identify where the model is systematically overconfident.
 
-**Additional confidence signal**: Rejection rates are a direct real-world signal of model failure. Over time, per-study and per-finding-type rejection rates can be aggregated to recalibrate confidence scores and identify where the model is systematically overconfident.
-
-Furthermore, the delta between a rejected suggestion and the radiologist's replacement can reveal systematic error patterns -- e.g., the model consistently misses a particular finding type or uses incorrect severity language. These corrections could also serve as a fine-tuning signal to improve the underlying model. This has some connection to work on [Expert Intervention Learning (EIL)](https://roboticsconference.org/2020/program/papers/55.html), whereby at every iteration, we execute the learner, collect intervention data, aggregate it, map to constraints on the learner's action-value function, and update the learner.
-
-**Individual preferences**: Radiologists vary in their reporting style -- preferred terminology, level of detail, hedging language, and how they describe ambiguous findings. Some of these differences reflect genuine clinical disagreement rather than model error. Modeling per-user correction patterns could allow the system to distinguish idiosyncratic style preferences from consensus errors, and to personalize suggestions to individual radiologists over time.
-
-This also has implications for confidence estimation: a rejection driven by style preference carries different weight than one driven by a factual error, and the two should ideally be distinguished.
+Furthermore, the delta between a rejected suggestion and the radiologist's replacement can reveal systematic error patterns (e.g., the model consistently misses a particular finding type or uses incorrect severity language). These corrections could also serve as a fine-tuning signal to improve the underlying model. This has some connection to work on [Expert Intervention Learning (EIL)](https://roboticsconference.org/2020/program/papers/55.html), whereby at every iteration, we execute the learner, collect intervention data, aggregate it, map to constraints on the learner's action-value function, and update the learner.
 
 **What would still be needed**:
 - A platform that captures accept/reject decisions and correction text
@@ -380,9 +374,9 @@ This also has implications for confidence estimation: a rejection driven by styl
 
 ### 2.7 (Future) Implicit Human Feedback
 
-**Overview**: Beyond explicit accept/reject decisions, users reveal information about their uncertainty and cognitive load through behavioral signals. Signs of frustration or confusion -- such as erratic cursor movements, extended review time, or facial expressions -- could serve as a proxy for cases where the model output was difficult to verify or likely incorrect, without requiring any deliberate action from the user. This connects to a relatively small body of work on [Learning from Implicit Human Feedback (LIHF)](https://proceedings.mlr.press/v155/cui21a/cui21a.pdf).
+**Overview**: Beyond explicit accept/reject decisions, users reveal information about their uncertainty and cognitive load through behavioral signals. Signs of frustration or confusion -- such as erratic cursor movements, extended review time, or facial expressions -- could serve as a proxy for cases where the model output was difficult to verify or likely incorrect, without requiring any deliberate action from the user. Implicit feedback could be used in combination with explicit feedback, as suggested in ["Leveraging Implicit Human Feedback to Better Learn from Explicit Human Feedback in Human-Robot Interactions"](https://dl.acm.org/doi/10.1145/3610978.3638368). This fits into a relatively small research area on [Learning from Implicit Human Feedback (LIHF)](https://proceedings.mlr.press/v155/cui21a/cui21a.pdf).
 
-**Additional confidence signal**: Cursor movement frequency and patterns (e.g., erratic or hesitant movement), time spent reviewing a report, scroll and re-read behavior, and hesitation before accepting a suggestion could all correlate with model errors or uncertain outputs. Facial expression recognition (e.g., signs of frustration, concentration, or confusion) could provide an additional signal, though this raises significant privacy concerns and would require explicit consent.
+Cursor movement frequency and patterns (e.g., erratic or hesitant movement), time spent reviewing a report, scroll and re-read behavior, and hesitation before accepting a suggestion could all correlate with model errors or uncertain outputs. Facial expression recognition (e.g., signs of frustration, concentration, or confusion) could provide an additional signal, though this raises significant privacy concerns and would require explicit consent.
 
 **What would still be needed**:
 - Platform integration with behavioral tracking
@@ -395,7 +389,7 @@ This also has implications for confidence estimation: a rejection driven by styl
 
 ## 3. Confidence Calibration and Evaluation
 
-The confidence signals from Section 2 are calibrated to produce a single P(incorrect) score per record and evaluated for their discriminative power. Sections 3.1 and 3.3 describe the current implementation; each includes a future work subsection covering more rigorous extensions. Section 3.2 covers multi-signal fusion, which requires multiple signals to be implemented first.
+The confidence signals from Section 2 are calibrated to produce a single P(incorrect) score per record and evaluated for their discriminative power. Sections 3.1 and 3.3 describe the current implementations, each with a future work subsection covering more rigorous extensions. Section 3.2 covers multi-signal fusion, which requires multiple signals to be (fully) implemented first.
 
 ### 3.1 Confidence Calibration
 
@@ -429,11 +423,12 @@ python scripts/calibrate.py \
     [--calibrators_path results/stability_calibrator.pkl]
 ```
 
-#### Future work:
+#### 3.1.4 Future work:
 
+- Run calibration with a larger/more comprehensive dataset.
 - Implement and compare calibration methods beyond logistic regression: temperature scaling, Platt scaling, and non-parametric isotonic regression.
-- As an alternative to probability calibration, conformal prediction provides distribution-free coverage guarantees -- e.g., a set of candidate findings that contains the correct finding with at least 95% probability. ["Conformal Language Modeling"](https://arxiv.org/pdf/2306.10193) demonstrates this in the context of language model generation. In the radiology setting this could produce a set of plausible findings for each study rather than a single report.
-- Where relevant, better calibrate token probabilities during model training.
+- As an alternative to probability calibration, we could use conformal prediction to achieve distribution-free coverage guarantees. For example, ["Conformal Language Modeling"](https://arxiv.org/pdf/2306.10193) demonstrates how to obtain a set of candidate findings that contains the correct finding with at least 95% probability in the context of language model generation. In the radiology setting this could produce a set of plausible findings for each study rather than a single report.
+- Where relevant, we may better calibrate token probabilities during model training.
 
 ---
 
@@ -441,12 +436,11 @@ python scripts/calibrate.py \
 
 **Overview**: Each method in Sections 2.1–2.3 is calibrated independently. A more complete approach would combine logit-based, grounding, consistency, stability, and probe features into a single unified P(incorrect) score, calibrated on a training split and evaluated on a completely unseen test split.
 
-**Ensembling and hybrid methods**: We could also consider model ensembling and mixture-of-experts approaches for confidence estimation, and combine categories of methods to create new hybrid methods that are not directly derivable from any single signal source.
+We could also consider ensembling and mixture-of-experts approaches for confidence estimation, and combine categories of methods to create new hybrid methods that are not directly derivable from any single source.
 
 **What would still be needed**:
-- Multiple confidence signals implemented (Sections 2.4–2.7)
+- Multiple (fully implemented) confidence signals
 - A labelled training split
-- A held-out test split
 
 ---
 
@@ -488,13 +482,12 @@ python scripts/analyze.py \
 
 This command produces distribution plots, precision-recall curves, and ROC curves for each stability metric, following the same format as Section 3.3.1. Results are saved to `plots/stability/` and `results/stability_summary.csv`.
 
-#### Future work:
+#### 3.3.4 Future work:
 
-- **Calibration quality**: Evaluate the calibrated score not only in terms of discrimination ability (AUPRC, AUROC) but also how well the score is actually calibrated: Brier score, ECE, reliability diagrams, coverage-accuracy curves.
+- **Calibration quality**: Evaluate the calibrated score not only in terms of discrimination ability (AUPRC, AUROC, etc.) but also how well the score is actually calibrated: Brier score, ECE, reliability diagrams, coverage-accuracy curves.
 - **Trade-off analysis**: Confidence estimation methods vary in practical utility -- both in terms of their discriminative power plus how well they are calibrated and in terms of their computational complexity. We should evaluate all methods in terms of their performance and computational cost to better understand this trade-off.
 - **Distribution shifts**: It is possible that models trained on one set of inputs will perform poorly on another set drawn from a different distribution (e.g., inputs from a different patient population or collected with a different scanner). It is important to understand how model performance varies across different distributions of data and whether confidence estimates continue to provide a useful signal.
-  - **OOD detection**: If model performance varies across distributions in a way that is not fully captured by the confidence signal, we should design out-of-distribution (OOD) detection methods. We could explore existing methods for visual OOD detection that utilize the vision embeddings of the generative radiology model, considering first distance-based and reconstruction-based methods.
-  - **What would still be needed**: access to vision embeddings and training data (preferably), and OOD dataset(s).
+  - **OOD detection**: If model performance varies across distributions in a way that is not fully captured by the confidence signal, we should design out-of-distribution (OOD) detection methods. We could explore existing methods for visual OOD detection that utilize the vision embeddings of the generative radiology model, considering first distance-based and reconstruction-based methods. This would require access to vision embeddings and training data (preferably), and OOD dataset(s).
 - **Error type prediction**: Utilize the error breakdown provided by CRIMSON (or another LLM judge). Can we detect false findings, or predict particular types of errors without access to the ground-truth reports?
 - **Generalization**: Evaluate how confidence estimation methods generalize across data modalities and different generative models.
 
@@ -505,9 +498,14 @@ This command produces distribution plots, precision-recall curves, and ROC curve
 
 Confidence estimation is most valuable when embedded in an assistive agent that can act on it -- deciding whether to surface a suggestion, present alternatives, request user input, or abstain entirely. The question shifts from *how certain is the model?* to *what should the agent do, given that certainty?* This section covers how confidence signals feed into agent behavior and how that behavior should be evaluated in terms of its utility to the radiologist.
 
-**Human uplift**: ["From Calibration to Collaboration: LLM Uncertainty Quantification Should Be More Human-Centered"](https://arxiv.org/abs/2506.07461) argues for a focus on metrics that correlate with human uplift on real-world decision tasks. In particular, do humans with access to algorithmic advice with quantified uncertainty perform better on real-world tasks than humans with (i) algorithmic advice but no quantified uncertainty; and (ii) no algorithmic advice at all? This framing motivates evaluating the entire pipeline -- not just calibration metrics -- against team-level outcomes. [Bansal et al. (2021)](https://ojs.aaai.org/index.php/AAAI/article/view/17359) make a related argument: the most accurate AI is not necessarily the best teammate, and AI systems should be trained to optimize human-AI team utility rather than standalone accuracy.
+**Human uplift**: ["From Calibration to Collaboration: LLM Uncertainty Quantification Should Be More Human-Centered"](https://arxiv.org/abs/2506.07461) argues for a focus on metrics that correlate with human uplift on real-world decision tasks. In particular, do humans with access to algorithmic advice with quantified uncertainty perform better on real-world tasks than humans with (i) algorithmic advice but no quantified uncertainty; and (ii) no algorithmic advice at all? This framing motivates evaluating the entire pipeline -- not just calibration metrics -- against team-level outcomes. 
+[Bansal et al. (2021)](https://ojs.aaai.org/index.php/AAAI/article/view/17359) make a related argument: the most accurate AI is not necessarily the best teammate, and AI systems should be trained to optimize human-AI team utility rather than standalone accuracy. [Candon et al. (2022)](https://dl.acm.org/doi/10.1145/3527188.3561915) recommend considering personalization and adaptation when designing assistive behaviors for prosocial agents because human perceptions of agent helpfulness vary.
 
-**Agent actions under uncertainty**: Given a confidence estimate, the agent can take a range of actions. Taking inspiration from ["Robots That Ask For Help: Uncertainty Alignment for Large Language Model Planners"](https://arxiv.org/abs/2307.01928), we may have the agent present the user with multiple options when it is not confident in a particular response. ["Conformal Language Modeling"](https://arxiv.org/pdf/2306.10193) presents a method to generate a complete set of candidate options with coverage guarantees (already done in the context of radiology report generation). Alternatively, we may choose to simply not show low-confidence suggestions below some threshold (selective prediction / abstention), and evaluate the accuracy of retained reports as a function of the threshold.
+**Agent actions under uncertainty**: Given a confidence estimate, the agent can take a range of actions. Taking inspiration from ["Robots That Ask For Help: Uncertainty Alignment for Large Language Model Planners"](https://arxiv.org/abs/2307.01928), we may have the agent present the user with multiple options when it is not confident in a particular response. ["Conformal Language Modeling"](https://arxiv.org/pdf/2306.10193) presents a method to generate a complete set of candidate options with coverage guarantees (already done in the context of radiology report generation). Alternatively, we may choose to simply not show low-confidence suggestions below some threshold (selective prediction / abstention), and evaluate the accuracy of retained reports as a function of the threshold. This connects to work on [Learning to Defer (L2D)](https://proceedings.neurips.cc/paper_files/paper/2018/file/09d37c08f7b129e96277388757530c72-Paper.pdf).
+
+**Individual preferences**: Radiologists vary in their reporting style -- preferred terminology, level of detail, hedging language, and how they describe ambiguous findings. Some of these differences reflect genuine clinical disagreement rather than model error. Modeling per-user correction patterns could allow the system to distinguish idiosyncratic style preferences from consensus errors, and to personalize suggestions to individual radiologists over time. This direction connects to research on [Reinforcement Learning from Human Feedback (RLHF)](https://arxiv.org/abs/2405.20677), as well as approaches to address its [limitations](https://arxiv.org/abs/2307.15217) (e.g., [Inverse Preference Learning (IPL)](https://arxiv.org/abs/2305.15363), [Contrastive Preference Learning (CPL)](https://arxiv.org/abs/2310.13639), and [Language Model Predictive Control (LMPC)](https://arxiv.org/abs/2402.11450)). This also has connection to work on [Recommender Systems (RS)](https://arxiv.org/html/2407.13699v1).
+
+We may be able to take inspiration from work such as [PRELUDE](https://proceedings.neurips.cc/paper_files/paper/2024/hash/f75744612447126da06767daecce1a84-Abstract-Conference.html), which infers a description of the user's latent preference based on historic edit data to define a prompt policy that drives future response generation. Users may also be able to state their preferences in some cases without the agent needing to learn them. If a user chooses to correct an AI-generated suggestion, it would be really helpful to know why they chose to correct it so we can learn from [pragmatic feature preferences](https://arxiv.org/abs/2405.14769).
 
 **Multi-step estimation**: Depending on the trade-offs identified in Section 3.3, we could design multi-step confidence estimation schemes that move from coarse/simple/fast metrics to more accurate/involved ones depending on some decision criteria, gating expensive methods behind a cheap initial screen.
 
