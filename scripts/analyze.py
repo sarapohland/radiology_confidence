@@ -151,6 +151,77 @@ def plot_pr_curve(pr: dict, field: str, save_path: str):
     plt.close(fig)
 
 
+def plot_correlation_matrix(records: list, metric_fields: list,
+                            score_type: str, save_path: str):
+    """
+    Pairwise Pearson correlation heatmap between all metric fields.
+
+    Columns are ordered by hierarchical clustering so that related metrics
+    appear together. The CRIMSON score is appended as a reference column
+    so the reader can see which metrics correlate most with quality.
+    """
+    import pandas as pd
+
+    all_fields = metric_fields + ["score"]
+    rows = []
+    for r in records:
+        if r.get("score") is None:
+            continue
+        vals = {f: r.get(f) for f in all_fields}
+        if any(v is None or (isinstance(v, float) and not np.isfinite(v))
+               for v in vals.values()):
+            continue
+        rows.append(vals)
+
+    if len(rows) < 5:
+        print(f"  Not enough labeled records for correlation matrix ({len(rows)})")
+        return
+
+    df = pd.DataFrame(rows, columns=all_fields)
+    col_labels = [metric_label(f) for f in metric_fields] + ["CRIMSON Score"]
+    df.columns = col_labels
+
+    corr_ordered = df.corr(method="pearson")
+
+    n = len(col_labels)
+    fig_size = max(8, n * 0.65)
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size * 0.85))
+
+    sns.heatmap(
+        corr_ordered,
+        ax=ax,
+        cmap="RdBu_r",
+        vmin=-1, vmax=1,
+        annot=n <= 14,
+        fmt=".2f",
+        annot_kws={"size": 7},
+        linewidths=0.3,
+        square=True,
+        cbar_kws={"shrink": 0.8, "label": "Pearson r"},
+    )
+
+    ax.set_title(f"{score_type.capitalize()} Metric Pairwise Correlations", pad=14)
+    ax.tick_params(axis="x", labelsize=8, rotation=45)
+    ax.tick_params(axis="y", labelsize=8, rotation=0)
+
+    # Highlight the CRIMSON Score row/col with a border
+    last = len(col_labels) - 1
+    ax.add_patch(plt.Rectangle(
+        (last, 0), 1, len(col_labels),
+        fill=False, edgecolor="black", lw=2, clip_on=False
+    ))
+    ax.add_patch(plt.Rectangle(
+        (0, last), len(col_labels), 1,
+        fill=False, edgecolor="black", lw=2, clip_on=False
+    ))
+
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    print(f"Correlation matrix saved to {save_path}")
+
+
 def plot_roc_curve(roc: dict, field: str, save_path: str):
     """ROC curve plot with operating points at 90/95/99% specificity."""
     label = metric_label(field)
@@ -341,6 +412,45 @@ def plot_selective_accuracy_change(sel: dict, score_type: str, save_path: str):
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
+
+
+def compute_accuracy_targeted_rows(sel: dict,
+                                   accuracy_breakpoints: list = None) -> list:
+    """
+    For each target accuracy level, find the highest coverage achievable
+    while maintaining accuracy >= target.
+
+    Returns a list of dicts with the same schema as print_selective_accuracy_table
+    rows, but keyed by target_accuracy instead of target_coverage.
+    """
+    if accuracy_breakpoints is None:
+        accuracy_breakpoints = [0.90, 0.95, 0.975, 0.99]
+
+    thresholds  = sel["thresholds"]
+    accuracies  = sel["accuracies"]
+    acc_changes = sel["acc_changes"]
+    coverages   = sel["coverages"]
+    n_retained  = sel["n_retained"]
+
+    rows = []
+    for target_acc in accuracy_breakpoints:
+        # Find the highest coverage where accuracy >= target (most permissive threshold)
+        candidates = [
+            (i, cov) for i, (cov, acc) in enumerate(zip(coverages, accuracies))
+            if acc == acc and acc >= target_acc  # acc == acc filters nan
+        ]
+        if not candidates:
+            continue
+        idx = max(candidates, key=lambda x: x[1])[0]
+        rows.append({
+            "target_accuracy": target_acc,
+            "threshold": round(thresholds[idx], 4),
+            "actual_coverage": round(coverages[idx], 4),
+            "n_retained": n_retained[idx],
+            "accuracy": round(accuracies[idx], 4),
+            "acc_change": round(acc_changes[idx], 4),
+        })
+    return rows
 
 
 def print_selective_accuracy_table(sel: dict, score_type: str,
@@ -590,15 +700,36 @@ def main():
 
             sel_csv_path = results_dir / f"{score_type}_selective_accuracy.csv"
             sel_rows = print_selective_accuracy_table(sel, score_type)
-            if sel_rows:
+            acc_rows = compute_accuracy_targeted_rows(sel)
+            if sel_rows or acc_rows:
                 os.makedirs(str(results_dir), exist_ok=True)
+                # Unified schema: target_coverage, target_accuracy, threshold,
+                # actual_coverage, n_retained, accuracy, acc_change
+                fieldnames = ["target_coverage", "target_accuracy", "threshold",
+                              "actual_coverage", "n_retained", "accuracy", "acc_change"]
+                cov_unified = [
+                    {"target_coverage": r["target_coverage"], "target_accuracy": "",
+                     **{k: r[k] for k in ("threshold", "actual_coverage",
+                                          "n_retained", "accuracy", "acc_change")}}
+                    for r in sel_rows
+                ]
+                acc_unified = [
+                    {"target_coverage": "", "target_accuracy": r["target_accuracy"],
+                     **{k: r[k] for k in ("threshold", "actual_coverage",
+                                          "n_retained", "accuracy", "acc_change")}}
+                    for r in acc_rows
+                ]
                 with open(sel_csv_path, "w", newline="") as f:
-                    writer = csv.DictWriter(f, fieldnames=list(sel_rows[0].keys()))
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
-                    writer.writerows(sel_rows)
+                    writer.writerows(cov_unified + acc_unified)
                 print(f"Selective accuracy table saved to {sel_csv_path}")
 
     print_summary_table(summary_rows, score_type)
+
+    # Correlation matrix
+    corr_path = os.path.join(type_plots_dir, "correlation_matrix.png")
+    plot_correlation_matrix(records, metric_fields, score_type, corr_path)
 
 
 if __name__ == "__main__":

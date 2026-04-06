@@ -4,3 +4,4 @@ __pycache__/
 *.pkl
 .claude/
 .DS_Store
+*/.DS_Store
