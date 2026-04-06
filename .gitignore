@@ -2,3 +2,5 @@ data/
 __pycache__/
 *.pyc
 *.pkl
+.claude/
+.DS_Store
