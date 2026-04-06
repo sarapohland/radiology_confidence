@@ -1,0 +1,4 @@
+metric,n_total,n_perfect,n_partial,n_incorrect,auprc,p_at_90r,p_at_95r,p_at_99r,auroc,sens_at_90spec,sens_at_95spec,sens_at_99spec
+botk_lp,756,369,297,90,0.3777,0.2375,0.2087,0.1411,0.8397,0.4333,0.3333,0.0667
+noise_rougeL,756,369,297,90,0.2045,0.166,0.1478,0.119,0.6858,0.1889,0.1556,0.0333
+prob_incorrect,756,369,297,90,0.3784,0.224,0.1686,0.1236,0.8412,0.5111,0.2889,0.0333

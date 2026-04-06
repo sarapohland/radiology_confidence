@@ -41,7 +41,7 @@ See the sections below for details on each step and its outputs. Configurable pa
    - [2.7 (Future) Implicit Human Feedback](#27-future-implicit-human-feedback)
 3. [Confidence Calibration and Evaluation](#3-confidence-calibration-and-evaluation)
    - [3.1 Confidence Calibration](#31-confidence-calibration)
-   - [3.2 (Future) Combining Multiple Signals](#32-future-combining-multiple-signals)
+   - [3.2 Combining Multiple Signals](#32-combining-multiple-signals)
    - [3.3 Confidence Evaluation](#33-confidence-evaluation)
 4. [Confidence Integration and Usability](#4-confidence-integration-and-usability)
 5. [Repository Structure](#5-repository-structure)
@@ -432,21 +432,65 @@ python scripts/calibrate.py \
 
 ---
 
-### 3.2 (Future) Combining Multiple Signals
+### 3.2 Combining Multiple Signals
 
-**Overview**: Each method in Sections 2.1–2.3 is calibrated independently. A more complete approach would combine logit-based, grounding, consistency, stability, and probe features into a single unified P(incorrect) score, calibrated on a training split and evaluated on a completely unseen test split.
+Each method in Sections 2.1–2.3 is calibrated independently, but signals from different methods can be combined into a single joint calibration. `multi_calibrate.py` joins the three scored JSONL files by study ID, selects features via greedy forward selection, fits a logistic regression over the selected features, and produces a combined `prob_incorrect` score.
 
-We could also consider ensembling and mixture-of-experts approaches for confidence estimation, and combine categories of methods to create new hybrid methods that are not directly derivable from any single source.
+#### 3.2.1 Calibrate combined multi-signal features:
 
-**What would still be needed**:
-- Multiple (fully implemented) confidence signals
-- A labelled training split
+```bash
+python scripts/multi_calibrate.py \
+    --logit_path       outputs/logit_scores.jsonl \
+    --consistency_path outputs/consistency_scores.jsonl \
+    --stability_path   outputs/stability_scores.jsonl \
+    --output_path      outputs/multi_scores.jsonl \
+    [--features botk_lp noise_rougeL ...]  # fix feature set, skip selection
+    [--max_features 10] \
+    [--min_gain 0.001] \
+    [--n_folds 5] \
+    [--plots_dir plots/] \
+    [--calibrators_path results/multi_calibrator.pkl]
+```
+
+For each study present in all three input files, this script:
+
+1. **Computes a correlation heatmap** across all 28 candidate features and saves it to `plots/multi/feature_correlation.png`, providing a visual summary of inter-feature redundancy.
+2. **Runs greedy forward feature selection**: computes individual (single-feature) CV AUPRC for every candidate, then iteratively adds the feature that produces the greatest AUPRC gain on the combined model. Selection stops when no remaining feature improves AUPRC by more than `--min_gain` (default 0.001) or `--max_features` is reached. Individual AUPRCs and the selection trace are saved to `results/multi_feature_selection.csv`.
+3. **Fits a logistic regression** over the selected features using stratified k-fold cross-validation (same procedure as Section 3.1). Out-of-fold probabilities are used as the `prob_incorrect` field for labeled records to avoid overfitting bias; the full model is used to score unlabeled records.
+4. **Reports feature importances** as standardized logistic regression coefficients (each coefficient scaled by the feature's standard deviation so that magnitudes are comparable across features with different units).
+
+Pass `--features` to fix the feature set and skip forward selection entirely.
+
+#### 3.2.2 Limitations:
+
+- Only features from currently implemented methods (Sections 2.1–2.3) are available; signals from grounding, hidden-state probing, and human feedback (Sections 2.4–2.7) cannot yet be included.
+- Forward selection is greedy and does not guarantee the globally optimal feature subset. It also evaluates each step on the full labeled set via cross-validation, so there is no completely held-out test split to assess true generalization.
+- Logistic regression assumes linear separability in feature space and does not capture non-linear interactions between signals.
+
+#### 3.2.3 Future work:
+
+- Add features from grounding, hidden-state probing, and human feedback signals once those methods are implemented (Sections 2.4–2.7).
+- Explore alternative feature selection strategies beyond greedy forward selection, such as regularization-based selection (e.g., L1/elastic net logistic regression), permutation importance, or backward elimination.
+- Evaluate non-linear models (e.g., gradient boosting, small MLP) as alternatives to logistic regression for combining signals.
+- Evaluate on a dedicated held-out test split for an unbiased estimate of generalization performance.
+- Consider ensemble and mixture-of-experts approaches that combine categories of methods to create hybrid signals not directly derivable from any single source.
 
 ---
 
 ### 3.3 Confidence Evaluation
 
-`analyze.py` evaluates the discriminative power of each confidence signal by computing distribution plots, precision-recall curves, and ROC curves. It auto-detects the score type from the input filename and routes all output to the corresponding subdirectory.
+`analyze.py` evaluates the discriminative power of each confidence signal by computing distribution plots, precision-recall curves, ROC curves, and a selective accuracy analysis. It auto-detects the score type from the input filename and routes all output to the corresponding subdirectory.
+
+Each invocation produces the following standard outputs:
+- **Distribution plots** (`plots/<type>/distributions/`): KDE for three populations -- perfect reports (score=1.0), partially correct (0≤score<1), and incorrect (score<0)
+- **Precision-recall curves** (`plots/<type>/pr_curves/`): PR curve per metric treating incorrect (score<0) as the positive class; saves AUPRC and Precision @ 90/95/99% Recall
+- **ROC curves** (`plots/<type>/roc_curves/`): ROC curve per metric; saves AUROC and Sensitivity @ 90/95/99% Specificity
+- **Summary CSV** (`results/<type>_summary.csv`): all of the above metrics per field; also printed to stdout in two tables (PR and ROC)
+
+When a `prob_incorrect` field is present, three additional outputs are produced:
+- **Selective accuracy plot** (`plots/<type>/selective_accuracy.png`): raw accuracy on retained records as a function of the P(incorrect) threshold, with a dashed baseline reference and coverage on a secondary y-axis
+- **Selective accuracy change plot** (`plots/<type>/selective_accuracy_change.png`): accuracy change from baseline (accuracy − baseline) as a function of the P(incorrect) threshold, with coverage on a secondary y-axis
+- **Selective accuracy CSV** (`results/<type>_selective_accuracy.csv`): threshold, coverage, accuracy, and accuracy change at key coverage breakpoints (100%, 90%, 80%, 70%, 60%, 50%)
 
 #### 3.3.1 Logit-based signals:
 
@@ -456,11 +500,7 @@ python scripts/analyze.py \
     --plots_dir plots/
 ```
 
-This command produces the following:
-- **Distribution plots** (`plots/logit/distributions/`): KDE for three populations -- perfect reports (score=1.0), partially correct (0≤score<1), and incorrect (score<0)
-- **Precision-recall curves** (`plots/logit/pr_curves/`): PR curve per metric treating incorrect (score<0) as the positive class; saves AUPRC and Precision @ 90/95/99% Recall
-- **ROC curves** (`plots/logit/roc_curves/`): ROC curve per metric; saves AUROC and Sensitivity @ 90/95/99% Specificity
-- **Summary CSV** (`results/logit_summary.csv`): all of the above metrics per field; also printed to stdout in two tables (PR and ROC)
+Results are saved to `plots/logit/` and `results/logit_summary.csv`.
 
 #### 3.3.2 Consistency under input perturbation:
 
@@ -470,7 +510,7 @@ python scripts/analyze.py \
     --plots_dir plots/
 ```
 
-This command produces distribution plots, precision-recall curves, and ROC curves for each consistency metric, following the same format as Section 3.3.1. Results are saved to `plots/consistency/` and `results/consistency_summary.csv`.
+Results are saved to `plots/consistency/` and `results/consistency_summary.csv`.
 
 #### 3.3.3 Consistency during sampling:
 
@@ -480,9 +520,19 @@ python scripts/analyze.py \
     --plots_dir plots/
 ```
 
-This command produces distribution plots, precision-recall curves, and ROC curves for each stability metric, following the same format as Section 3.3.1. Results are saved to `plots/stability/` and `results/stability_summary.csv`.
+Results are saved to `plots/stability/` and `results/stability_summary.csv`.
 
-#### 3.3.4 Future work:
+#### 3.3.4 Multi-signal calibration:
+
+```bash
+python scripts/analyze.py \
+    --input_path outputs/multi_scores.jsonl \
+    --plots_dir plots/
+```
+
+Results are saved to `plots/multi/` and `results/multi_summary.csv`. Because `multi_scores.jsonl` includes a `prob_incorrect` field, this command also produces the selective accuracy plots and CSV.
+
+#### 3.3.5 Future work:
 
 - **Calibration quality**: Evaluate the calibrated score not only in terms of discrimination ability (AUPRC, AUROC, etc.) but also how well the score is actually calibrated: Brier score, ECE, reliability diagrams, coverage-accuracy curves.
 - **Trade-off analysis**: Confidence estimation methods vary in practical utility -- both in terms of their discriminative power plus how well they are calibrated and in terms of their computational complexity. We should evaluate all methods in terms of their performance and computational cost to better understand this trade-off.
@@ -533,13 +583,17 @@ radiology_confidence/
 │   ├── judge_scores.jsonl             # CRIMSON scores (1.2.2)
 │   ├── logit_scores.jsonl             # logit-based metrics + prob_incorrect (2.1.1, 3.1)
 │   ├── consistency_scores.jsonl       # consistency metrics + prob_incorrect (2.2.1, 3.1)
-│   └── stability_scores.jsonl         # sampling stability metrics + prob_incorrect (2.3.1, 3.1)
+│   ├── stability_scores.jsonl         # sampling stability metrics + prob_incorrect (2.3.1, 3.1)
+│   └── multi_scores.jsonl             # multi-signal features + prob_incorrect (3.2)
 │
 ├── results/
 │   ├── judge_summary.csv              # CRIMSON score distribution + threshold table (1.2.3)
 │   ├── logit_summary.csv              # logit metric AUPRC / AUROC table (3.3)
 │   ├── consistency_summary.csv        # consistency metric AUPRC / AUROC table (3.3)
 │   ├── stability_summary.csv          # stability metric AUPRC / AUROC table (3.3)
+│   ├── multi_summary.csv              # multi-signal metric AUPRC / AUROC table (3.3)
+│   ├── multi_selective_accuracy.csv   # selective accuracy at coverage breakpoints (3.3)
+│   ├── multi_feature_selection.csv    # individual AUPRCs + forward selection trace (3.2)
 │
 ├── plots/
 │   ├── judge/                         # CRIMSON score distribution + error breakdown (1.2.3)
@@ -551,10 +605,17 @@ radiology_confidence/
 │   │   ├── distributions/             # consistency score distributions (3.3)
 │   │   ├── pr_curves/                 # consistency PR curves (3.3)
 │   │   └── roc_curves/                # consistency ROC curves (3.3)
-│   └── stability/
-│       ├── distributions/             # stability score distributions (3.3)
-│       ├── pr_curves/                 # stability PR curves (3.3)
-│       └── roc_curves/                # stability ROC curves (3.3)
+│   ├── stability/
+│   │   ├── distributions/             # stability score distributions (3.3)
+│   │   ├── pr_curves/                 # stability PR curves (3.3)
+│   │   └── roc_curves/                # stability ROC curves (3.3)
+│   └── multi/
+│       ├── distributions/             # multi-signal score distributions (3.3)
+│       ├── pr_curves/                 # multi-signal PR curves (3.3)
+│       ├── roc_curves/                # multi-signal ROC curves (3.3)
+│       ├── feature_correlation.png    # Pearson correlation heatmap across all features (3.2)
+│       ├── selective_accuracy.png     # raw accuracy vs. threshold (3.3)
+│       └── selective_accuracy_change.png  # accuracy change vs. threshold (3.3)
 │
 ├── lexicon/
 │   └── RadLex.owl                     # RadLex ontology for domain lexical weighting (2.1.1)
@@ -574,7 +635,8 @@ radiology_confidence/
 │   ├── consistency.py                 # 2.2.1 -- consistency under input perturbation
 │   ├── stability.py                   # 2.3.1 -- consistency during sampling
 │   ├── calibrate.py                   # 3.1 -- multivariate logistic regression calibration
-│   ├── analyze.py                     # 3.3 -- distributions, PR + ROC curves
+│   ├── multi_calibrate.py             # 3.2 -- multi-signal logistic regression calibration
+│   ├── analyze.py                     # 3.3 -- distributions, PR + ROC + selective accuracy
 │   ├── text_utils.py                  # shared text preprocessing utilities
 │   ├── utils.py                       # shared utilities (I/O, ROUGE, image helpers, metrics)
 │   └── inspect_lexicon.py             # browse and filter the RadLex lexicon

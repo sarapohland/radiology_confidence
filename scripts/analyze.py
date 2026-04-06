@@ -182,6 +182,238 @@ def plot_roc_curve(roc: dict, field: str, save_path: str):
 
 
 # ---------------------------------------------------------------------------
+# Selective accuracy (abstention / selective prediction)
+# ---------------------------------------------------------------------------
+
+def compute_selective_accuracy(records: list) -> dict:
+    """
+    Compute accuracy and coverage as a function of P(incorrect) threshold.
+
+    For each threshold t, only records with prob_incorrect <= t are retained.
+    Accuracy = fraction of retained labeled records with score >= 0 (correct).
+    Coverage = fraction of all labeled records retained.
+
+    Thresholds are swept over all unique prob_incorrect values in [0, 1],
+    plus endpoints 0.0 and 1.0.
+
+    Returns a dict with parallel lists:
+        thresholds  : float list, ascending
+        accuracies  : float list, accuracy on retained records at each threshold
+        coverages   : float list, fraction of labeled records retained
+        acc_changes : float list, accuracy - baseline_accuracy at each threshold
+        n_retained  : int list, number of retained labeled records
+    """
+    labeled = [
+        r for r in records
+        if r.get("score") is not None and r.get("prob_incorrect") is not None
+    ]
+    if not labeled:
+        return {}
+
+    baseline_accuracy = sum(1 for r in labeled if r["score"] >= 0.0) / len(labeled)
+    n_total = len(labeled)
+
+    thresholds = sorted(set([0.0, 1.0] + [r["prob_incorrect"] for r in labeled]))
+
+    results = {"thresholds": [], "accuracies": [], "coverages": [],
+               "acc_changes": [], "n_retained": []}
+
+    for t in thresholds:
+        retained = [r for r in labeled if r["prob_incorrect"] <= t]
+        if not retained:
+            results["thresholds"].append(t)
+            results["accuracies"].append(float("nan"))
+            results["coverages"].append(0.0)
+            results["acc_changes"].append(float("nan"))
+            results["n_retained"].append(0)
+            continue
+        acc = sum(1 for r in retained if r["score"] >= 0.0) / len(retained)
+        results["thresholds"].append(t)
+        results["accuracies"].append(acc)
+        results["coverages"].append(len(retained) / n_total)
+        results["acc_changes"].append(acc - baseline_accuracy)
+        results["n_retained"].append(len(retained))
+
+    return {"baseline_accuracy": baseline_accuracy, "n_total": n_total, **results}
+
+
+def _selective_accuracy_valid(sel: dict):
+    """Return (thresholds, accuracies, acc_changes, coverages) with nan rows removed."""
+    valid = [
+        (t, a, ac, c)
+        for t, a, ac, c in zip(
+            sel["thresholds"], sel["accuracies"], sel["acc_changes"], sel["coverages"]
+        )
+        if a == a  # nan != nan
+    ]
+    if not valid:
+        return None
+    return zip(*valid)
+
+
+def plot_selective_accuracy(sel: dict, score_type: str, save_path: str):
+    """
+    Plot raw accuracy and coverage as a function of P(incorrect) threshold.
+
+    Primary y-axis : accuracy on retained records, with a dashed baseline reference.
+    Secondary y-axis: coverage (fraction of labeled records retained).
+    """
+    unpacked = _selective_accuracy_valid(sel)
+    if unpacked is None:
+        return
+    thresholds_v, accs_v, _, coverages_v = unpacked
+    thresholds_v, accs_v, coverages_v = list(thresholds_v), list(accs_v), list(coverages_v)
+
+    baseline    = sel["baseline_accuracy"]
+    color_acc   = "steelblue"
+    color_cov   = "tomato"
+
+    fig, ax1 = plt.subplots(figsize=(9, 5))
+    ax1.plot(thresholds_v, accs_v, color=color_acc, linewidth=2,
+             label="Accuracy (retained records)")
+    ax1.axhline(baseline, color="gray", linestyle="--", linewidth=1,
+                label=f"Baseline accuracy ({baseline:.3f})")
+    ax1.set_xlabel("P(incorrect) threshold")
+    ax1.set_ylabel("Accuracy", color=color_acc)
+    ax1.tick_params(axis="y", labelcolor=color_acc)
+    ax1.set_xlim(0, 1)
+    ax1.set_ylim(max(0, min(accs_v) - 0.05), 1.05)
+
+    ax2 = ax1.twinx()
+    ax2.plot(thresholds_v, coverages_v, color=color_cov, linewidth=2,
+             linestyle="--", label="Coverage (fraction retained)")
+    ax2.set_ylabel("Coverage", color=color_cov)
+    ax2.tick_params(axis="y", labelcolor=color_cov)
+    ax2.set_ylim(0, 1.05)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="lower right")
+    ax1.set_title(f"Selective Accuracy — {score_type} (prob_incorrect threshold)")
+
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_selective_accuracy_change(sel: dict, score_type: str, save_path: str):
+    """
+    Plot accuracy change from baseline and coverage as a function of P(incorrect) threshold.
+
+    Primary y-axis : accuracy change (accuracy on retained data − baseline accuracy).
+    Secondary y-axis: coverage (fraction of labeled records retained).
+    """
+    unpacked = _selective_accuracy_valid(sel)
+    if unpacked is None:
+        return
+    thresholds_v, _, acc_changes_v, coverages_v = unpacked
+    thresholds_v, acc_changes_v, coverages_v = (
+        list(thresholds_v), list(acc_changes_v), list(coverages_v)
+    )
+
+    baseline  = sel["baseline_accuracy"]
+    color_acc = "steelblue"
+    color_cov = "tomato"
+
+    fig, ax1 = plt.subplots(figsize=(9, 5))
+    ax1.plot(thresholds_v, acc_changes_v, color=color_acc, linewidth=2,
+             label=f"Accuracy change (baseline = {baseline:.3f})")
+    ax1.axhline(0, color="gray", linestyle="--", linewidth=1)
+    ax1.set_xlabel("P(incorrect) threshold")
+    ax1.set_ylabel("Accuracy change from baseline", color=color_acc)
+    ax1.tick_params(axis="y", labelcolor=color_acc)
+    ax1.set_xlim(0, 1)
+
+    ax2 = ax1.twinx()
+    ax2.plot(thresholds_v, coverages_v, color=color_cov, linewidth=2,
+             linestyle="--", label="Coverage (fraction retained)")
+    ax2.set_ylabel("Coverage", color=color_cov)
+    ax2.tick_params(axis="y", labelcolor=color_cov)
+    ax2.set_ylim(0, 1.05)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="lower right")
+    ax1.set_title(f"Selective Accuracy Change — {score_type} (prob_incorrect threshold)")
+
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
+def print_selective_accuracy_table(sel: dict, score_type: str,
+                                   coverage_breakpoints: list = None):
+    """
+    Print a table of accuracy change and coverage at key coverage breakpoints.
+    """
+    if coverage_breakpoints is None:
+        coverage_breakpoints = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
+
+    thresholds  = sel["thresholds"]
+    accuracies  = sel["accuracies"]
+    acc_changes = sel["acc_changes"]
+    coverages   = sel["coverages"]
+    n_retained  = sel["n_retained"]
+    baseline    = sel["baseline_accuracy"]
+    n_total     = sel["n_total"]
+
+    # For each breakpoint, find the row closest to that coverage level
+    rows = []
+    for target_cov in coverage_breakpoints:
+        # Find threshold that gives coverage closest to (but not exceeding) target
+        candidates = [
+            (i, cov) for i, cov in enumerate(coverages)
+            if cov <= target_cov + 1e-9 and accuracies[i] == accuracies[i]
+        ]
+        if not candidates:
+            continue
+        idx = max(candidates, key=lambda x: x[1])[0]
+        rows.append({
+            "target_coverage": target_cov,
+            "threshold": round(thresholds[idx], 4),
+            "actual_coverage": round(coverages[idx], 4),
+            "n_retained": n_retained[idx],
+            "accuracy": round(accuracies[idx], 4),
+            "acc_change": round(acc_changes[idx], 4),
+        })
+
+    if not rows:
+        return rows
+
+    headers = ["Target Cov", "Threshold", "Actual Cov", "N Retained",
+               "Accuracy", "Δ Accuracy"]
+    keys    = ["target_coverage", "threshold", "actual_coverage",
+               "n_retained", "accuracy", "acc_change"]
+
+    def fmt(row, key):
+        v = row[key]
+        if key == "n_retained":
+            return str(v)
+        if isinstance(v, float):
+            return f"{v:.4f}"
+        return str(v)
+
+    col_widths = [max(len(h), max(len(fmt(r, k)) for r in rows))
+                  for h, k in zip(headers, keys)]
+    sep = "+-" + "-+-".join("-" * w for w in col_widths) + "-+"
+    hrow = "| " + " | ".join(h.ljust(w) for h, w in zip(headers, col_widths)) + " |"
+
+    print(f"\n{score_type.upper()} — SELECTIVE ACCURACY  "
+          f"(baseline accuracy = {baseline:.4f}, n = {n_total})")
+    print(sep)
+    print(hrow)
+    print(sep)
+    for row in rows:
+        vals = [fmt(row, k) for k in keys]
+        print("| " + " | ".join(v.ljust(w) for v, w in zip(vals, col_widths)) + " |")
+    print(sep)
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Summary table printing
 # ---------------------------------------------------------------------------
 
@@ -342,6 +574,29 @@ def main():
         print("No summary rows to write.")
 
     print(f"Plots saved under {type_plots_dir}/ (distributions/, pr_curves/, roc_curves/)")
+
+    # Selective accuracy analysis (only when prob_incorrect is present)
+    has_prob_incorrect = any(r.get("prob_incorrect") is not None for r in records)
+    if has_prob_incorrect:
+        sel = compute_selective_accuracy(records)
+        if sel:
+            sel_plot_path = os.path.join(type_plots_dir, "selective_accuracy.png")
+            plot_selective_accuracy(sel, score_type, sel_plot_path)
+            print(f"Selective accuracy plot saved to {sel_plot_path}")
+
+            sel_change_plot_path = os.path.join(type_plots_dir, "selective_accuracy_change.png")
+            plot_selective_accuracy_change(sel, score_type, sel_change_plot_path)
+            print(f"Selective accuracy change plot saved to {sel_change_plot_path}")
+
+            sel_csv_path = results_dir / f"{score_type}_selective_accuracy.csv"
+            sel_rows = print_selective_accuracy_table(sel, score_type)
+            if sel_rows:
+                os.makedirs(str(results_dir), exist_ok=True)
+                with open(sel_csv_path, "w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=list(sel_rows[0].keys()))
+                    writer.writeheader()
+                    writer.writerows(sel_rows)
+                print(f"Selective accuracy table saved to {sel_csv_path}")
 
     print_summary_table(summary_rows, score_type)
 
